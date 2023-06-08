@@ -3,6 +3,7 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { verifyJWT, generateJWT } from './utils/auth.js';
 import { getClient } from './utils/db.js';
+import { createClient } from 'redis';
 
 
 // 初始化
@@ -17,7 +18,9 @@ if (!process.env.dburl) throw new Error('DB url not found.');
 
 
 // 处理 Auth Header
-function verifyAuthHeader(req, res) {
+app.all("*", (req, res, next) => {
+    if (['/login'].indexOf(req.path) != -1) 
+        next();
     const authHeader = req.headers['Authorization'] || req.headers['authorization'];
     if (!authHeader) return res.status(500).json({ code: -1, errmsg: 'No auth header.' });
     const token = authHeader.split(' ')[1];
@@ -25,17 +28,18 @@ function verifyAuthHeader(req, res) {
     if (!token) return res.status(500).json({ code: -2, errmsg: 'Auth header is invalid.' });
     const verify = verifyJWT(token, process.env.jwtsecret);
     if (!verify) return res.status(401).json({ code: -3, errmsg: 'Unauthorized' });
-    return false; // header有效
-} 
+    req.vresult = verify;
+    next();
+})
+
 
 
 // 获取用户信息
 app.get('/user', async (req, res) => {
-    const verifyResult = verifyAuthHeader(req, res);
-    if (!verifyResult) 
-      return res.status(200).json({ code: 0, result: verify });
-    else
-      return verifyResult;
+    // const authHeader = req.headers['Authorization'] || req.headers['authorization'];
+    // const token = authHeader.split(' ')[1];
+    // const verifyResult = verifyJWT(token, process.env.jwtsecret);
+    res.status(200).json({ code: 0, result: req.vresult });
 })
 
 
@@ -46,19 +50,26 @@ app.post('/login', async (req, res) => {
     if (!id || !pwd) return res.status(500).json({ code: -1, errmsg: 'uid and/or password not found.' })
     // ... 查数据库 => username
     const username = 'test'; 
-    return res.json({ code: 0, result: generateJWT({id, pwd}, process.env.jwtsecret) });
+    return res.json({ code: 0, result: generateJWT({id, username}, process.env.jwtsecret) });
 })
 
 
 // 初始化用户数据表
 app.get('/user/init', async (req, res) => {
-    const authHeader = req.headers['Authorization'] || req.headers['authorization'];
-    if (!authHeader) return res.status(500).json({ code: -1, errmsg: 'No auth header.' });
-    const token = authHeader.split(' ')[1];
-    console.log(`Received token: ${token}`);
-    if (!token) return res.status(500).json({ code: -2, errmsg: 'Auth header is invalid.' });
-    const verify = verifyJWT(token, process.env.jwtsecret);
-    if (!verify) return res.status(401).json({ code: -3, errmsg: 'Unauthorized' });
+    try {
+        const uinfo = req.vresult;
+        const client = getClient(process.env.dburl);
+        // const client = createClient({
+        //     url: process.env.dburl
+        // });
+        await client.connect();
+        await client.hSet(uinfo.id, 'username', uinfo.username);
+        await client.hSet(uinfo.id, 'lastupdate', 0);
+        await client.disconnect();
+    } catch (err) {
+        return res.status(500).json({ code: -1, errmsg: err });
+    }
+    return res.json({ code: 0, msg: 'OK' });
 })
 
 
